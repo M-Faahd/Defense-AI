@@ -1,0 +1,46 @@
+# Whole lab in Docker:   docker compose up --build
+# Attack it from inside:  docker compose --profile attack run --rm attacker
+#
+# Isolation: decoys and the attacker box sit ONLY on "lab", an internal
+# network with no route to the internet or your LAN. The backend is on
+# both networks so the dashboard on your PC can reach it.
+services:
+  backend:
+    build: { context: ., dockerfile: Dockerfile.backend }
+    ports: ["8000:8000"]
+    volumes: ["db-data:/data"]
+    environment:
+      OLLAMA_URL: http://host.docker.internal:11434/api/generate
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    networks: [lab, edge]
+
+  ssh-decoy:
+    build: ./honeypot
+    command: python ssh_honeypot.py
+    environment: { DEFENCEAI_BACKEND: "http://backend:8000" }
+    depends_on: [backend]
+    networks: [lab]
+
+  web-decoy:
+    build: ./honeypot
+    command: python web_honeypot.py
+    environment: { DEFENCEAI_BACKEND: "http://backend:8000" }
+    depends_on: [backend]
+    networks: [lab]
+
+  attacker:
+    profiles: ["attack"]
+    image: python:3.12-slim
+    working_dir: /attacker
+    volumes: ["./attacker:/attacker:ro"]
+    environment: { SSH_HOST: ssh-decoy, WEB_HOST: web-decoy }
+    command: sh -c "pip install -q paramiko httpx && python attack_sim.py all"
+    networks: [lab]
+    depends_on: [ssh-decoy, web-decoy]
+
+networks:
+  lab: { internal: true }
+  edge: {}
+
+volumes:
+  db-data: {}
